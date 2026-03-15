@@ -119,10 +119,10 @@ def transcribe_chunks(chunks: list[dict], device: str) -> list[dict]:
         feature_extractor=processor.feature_extractor,
         torch_dtype=torch_dtype,
         device=device,
-        # Key: let Whisper handle language detection per-chunk
-        # since you code-switch, we don't force a language
+        # Force Malayalam — auto-detect misidentifies it as Hindi/Tamil
         generate_kwargs={
             "task": "transcribe",
+            "language": "ml",
             "return_timestamps": True,
         },
     )

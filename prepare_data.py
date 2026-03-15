@@ -32,7 +32,7 @@ CHUNK_OVERLAP = 2    # seconds overlap between chunks
 SAMPLE_RATE = 16000  # Whisper expects 16kHz
 TEST_SPLIT = 0.15    # 15% of chunks go to test set
 
-TEACHER_MODEL = "openai/whisper-large-v3"
+TEACHER_MODEL = "thennal/whisper-medium-ml"
 
 # Malayalam Unicode range
 _MALAYALAM_RE = re.compile(r'[\u0D00-\u0D7F]+')

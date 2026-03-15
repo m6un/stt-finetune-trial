@@ -1,7 +1,7 @@
 """
 prepare_data.py — Takes raw voice memos, chunks them, and generates pseudo-labels.
 
-Uses whisper-large-v3 as the "teacher" to transcribe your audio.
+Uses Sarvam Saaras v3 API (translit mode) to transcribe your audio.
 You'll hand-correct a small test split for honest evaluation.
 """
 
@@ -11,14 +11,10 @@ import argparse
 import random
 from pathlib import Path
 
-import re
-
-import torch
+import requests
 import librosa
 import soundfile as sf
 from tqdm import tqdm
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
-from ml2en import ml2en
 
 
 # --- Config ---
@@ -31,18 +27,6 @@ CHUNK_DURATION = 20  # seconds — sweet spot for Whisper
 CHUNK_OVERLAP = 2    # seconds overlap between chunks
 SAMPLE_RATE = 16000  # Whisper expects 16kHz
 TEST_SPLIT = 0.15    # 15% of chunks go to test set
-
-TEACHER_MODEL = "thennal/whisper-medium-ml"
-
-# Malayalam Unicode range
-_MALAYALAM_RE = re.compile(r'[\u0D00-\u0D7F]+')
-
-
-def to_manglish(text: str) -> str:
-    """Convert Malayalam script portions to Manglish, leave English as-is."""
-    def replace_match(match):
-        return ml2en.transliterate(match.group(0))
-    return _MALAYALAM_RE.sub(replace_match, text)
 
 
 def find_audio_files(raw_dir: str) -> list[Path]:
@@ -97,45 +81,29 @@ def chunk_audio(audio_path: Path, output_dir: str) -> list[dict]:
     return chunks
 
 
-def transcribe_chunks(chunks: list[dict], device: str) -> list[dict]:
-    """Transcribe all chunks using the teacher model (whisper-large-v3)."""
-    print(f"\nLoading teacher model: {TEACHER_MODEL}")
-    print(f"  Device: {device}")
+def transcribe_chunks(chunks: list[dict], api_key: str) -> list[dict]:
+    """Transcribe all chunks using Sarvam Saaras v3 API (translit mode — all Latin script)."""
+    url = "https://api.sarvam.ai/speech-to-text"
+    headers = {"api-subscription-key": api_key}
 
-    torch_dtype = torch.float16 if device == "cuda" else torch.float32
-
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        TEACHER_MODEL,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True,
-    ).to(device)
-
-    processor = AutoProcessor.from_pretrained(TEACHER_MODEL)
-
-    pipe = pipeline(
-        "automatic-speech-recognition",
-        model=model,
-        tokenizer=processor.tokenizer,
-        feature_extractor=processor.feature_extractor,
-        torch_dtype=torch_dtype,
-        device=device,
-        # Force Malayalam — auto-detect misidentifies it as Hindi/Tamil
-        generate_kwargs={
-            "task": "transcribe",
-            "language": "ml",
-            "return_timestamps": True,
-        },
-    )
-
-    print(f"\nTranscribing {len(chunks)} chunks...")
+    print(f"\nTranscribing {len(chunks)} chunks via Sarvam API (translit mode)...")
     for chunk in tqdm(chunks):
-        result = pipe(chunk["audio_path"])
-        raw_text = result["text"].strip()
-        chunk["transcription_raw"] = raw_text  # keep original for reference
-        chunk["transcription"] = to_manglish(raw_text)  # convert to manglish
-        # Store detected chunks for reference
-        if "chunks" in result:
-            chunk["word_timestamps"] = result["chunks"]
+        with open(chunk["audio_path"], "rb") as f:
+            resp = requests.post(
+                url,
+                headers=headers,
+                files={"file": (Path(chunk["audio_path"]).name, f, "audio/wav")},
+                data={"model": "saaras:v3", "language_code": "ml-IN", "mode": "translit"},
+            )
+
+        if resp.status_code != 200:
+            print(f"\n  Error on {chunk['audio_path']}: {resp.status_code} {resp.text}")
+            chunk["transcription"] = ""
+            continue
+
+        result = resp.json()
+        chunk["transcription"] = result.get("transcript", "").strip()
+        chunk["language_code"] = result.get("language_code", "")
 
     return chunks
 
@@ -184,7 +152,7 @@ def split_and_save(chunks: list[dict]):
 def main():
     parser = argparse.ArgumentParser(description="Prepare audio data for Whisper fine-tuning")
     parser.add_argument("--raw-dir", default=RAW_DIR, help="Directory with raw audio files")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--api-key", default=os.environ.get("SARVAM_API_KEY"), help="Sarvam API key (or set SARVAM_API_KEY env var)")
     parser.add_argument("--skip-transcribe", action="store_true", help="Skip transcription (if already done)")
     args = parser.parse_args()
 
@@ -208,9 +176,12 @@ def main():
 
     print(f"\nTotal chunks: {len(all_chunks)}")
 
-    # Step 3: Transcribe with teacher model
+    # Step 3: Transcribe with Sarvam API
     if not args.skip_transcribe:
-        all_chunks = transcribe_chunks(all_chunks, args.device)
+        if not args.api_key:
+            print("\nError: Sarvam API key required. Pass --api-key or set SARVAM_API_KEY env var.")
+            return
+        all_chunks = transcribe_chunks(all_chunks, args.api_key)
     else:
         print("Skipping transcription (--skip-transcribe)")
 

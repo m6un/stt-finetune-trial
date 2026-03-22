@@ -31,7 +31,7 @@ TEST_SPLIT = 0.15    # 15% of chunks go to test set
 
 def find_audio_files(raw_dir: str) -> list[Path]:
     """Find all audio files in the raw directory."""
-    extensions = {".m4a", ".mp3", ".wav", ".flac", ".ogg", ".webm", ".mp4"}
+    extensions = {".m4a", ".mp3", ".wav", ".flac", ".ogg", ".webm", ".mp4", ".opus"}
     raw_path = Path(raw_dir)
     files = [f for f in raw_path.rglob("*") if f.suffix.lower() in extensions]
     print(f"Found {len(files)} audio files in {raw_dir}")

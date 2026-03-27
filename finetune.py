@@ -7,6 +7,7 @@ For now, it's a solid baseline you run manually.
 
 import os
 import json
+import shutil
 import argparse
 from pathlib import Path
 from dataclasses import dataclass
@@ -46,7 +47,7 @@ class TrainConfig:
     learning_rate: float = 1e-4
     batch_size: int = 8
     gradient_accumulation_steps: int = 2
-    num_epochs: int = 3
+    num_epochs: int = 10
     warmup_ratio: float = 0.1
     max_grad_norm: float = 1.0
     fp16: bool = True
@@ -78,6 +79,14 @@ class PersonalSpeechDataset(Dataset):
         self.processor = processor
         self.config = config
         self.samples = []
+
+        # Configure tokenizer to include Whisper prefix tokens in labels so the
+        # decoder is trained with context [start, ml, transcribe, no_ts, text...]
+        # which matches exactly what the inference pipeline forces via
+        # forced_decoder_ids when it detects Malayalam audio.
+        processor.tokenizer.set_prefix_tokens(
+            language="ml", task=config.task, predict_timestamps=False
+        )
 
         with open(jsonl_path) as f:
             for line in f:
@@ -111,13 +120,21 @@ class PersonalSpeechDataset(Dataset):
             return_tensors="np",
         ).input_features[0]
 
-        # Process text → token IDs
+        # Process text → token IDs with language/task prefix.
+        # Strip the leading <|startoftranscript|> (50258): shift_tokens_right in
+        # WhisperForConditionalGeneration.forward adds decoder_start_token_id at
+        # position 0 automatically. Keeping it here would double it and shift the
+        # training context vs inference context by one position.
+        # Labels after strip: [<|ml|>, <|transcribe|>, <|notimestamps|>, text..., <|endoftext|>]
         transcription = sample.get("transcription", "")
         labels = self.processor.tokenizer(
             transcription,
             return_tensors="np",
             padding=False,
         ).input_ids[0]
+        STARTOFTRANSCRIPT = 50258
+        if len(labels) > 0 and labels[0] == STARTOFTRANSCRIPT:
+            labels = labels[1:]
 
         return {
             "input_features": input_features,
@@ -131,18 +148,15 @@ def collate_fn(batch, pad_token_id: int):
         torch.tensor(x["input_features"]) for x in batch
     ])
 
-    # Pad labels to max length in batch
+    # Pad labels: initialize to -100 (ignored by loss), then fill real tokens.
+    # Masking by index (not value) ensures the EOS token (which shares the same
+    # ID as pad_token_id in Whisper) is NOT accidentally masked to -100 — the
+    # model needs the EOS loss signal to learn to stop generating.
     max_label_len = max(len(x["labels"]) for x in batch)
-    padded_labels = []
-    for x in batch:
-        labels = x["labels"]
-        pad_len = max_label_len - len(labels)
-        padded = np.concatenate([labels, np.full(pad_len, pad_token_id)])
-        padded_labels.append(torch.tensor(padded, dtype=torch.long))
-
-    labels = torch.stack(padded_labels)
-    # Replace padding with -100 so loss ignores it
-    labels[labels == pad_token_id] = -100
+    labels = torch.full((len(batch), max_label_len), -100, dtype=torch.long)
+    for i, x in enumerate(batch):
+        seq = torch.tensor(x["labels"], dtype=torch.long)
+        labels[i, :len(seq)] = seq
 
     return {"input_features": input_features, "labels": labels}
 
@@ -212,6 +226,7 @@ def train(config: TrainConfig):
     os.makedirs(config.output_dir, exist_ok=True)
     global_step = 0
     best_loss = float("inf")
+    best_epoch = -1
     loss_accum = 0.0
 
     print(f"\nTraining for {config.num_epochs} epochs, {total_steps} optimizer steps")
@@ -280,16 +295,25 @@ def train(config: TrainConfig):
 
         if avg_epoch_loss < best_loss:
             best_loss = avg_epoch_loss
+            best_epoch = epoch + 1
             best_dir = os.path.join(config.output_dir, "best")
             model.save_pretrained(best_dir)
             processor.save_pretrained(best_dir)
             print(f"  New best model saved: {best_dir}")
 
-    # Save final model
+    # Save final model as a copy of the best epoch (eval.py evaluates final/)
+    best_dir = os.path.join(config.output_dir, "best")
     final_dir = os.path.join(config.output_dir, "final")
-    model.save_pretrained(final_dir)
-    processor.save_pretrained(final_dir)
-    print(f"\nTraining complete! Final model: {final_dir}")
+    if os.path.exists(best_dir):
+        if os.path.exists(final_dir):
+            shutil.rmtree(final_dir)
+        shutil.copytree(best_dir, final_dir)
+        print(f"\nTraining complete! Final model (from best epoch {best_epoch}): {final_dir}")
+    else:
+        os.makedirs(final_dir, exist_ok=True)
+        model.save_pretrained(final_dir)
+        processor.save_pretrained(final_dir)
+        print(f"\nTraining complete! Final model: {final_dir}")
     print(f"Best loss: {best_loss:.4f}")
 
     # Save config for reproducibility
@@ -301,7 +325,7 @@ def train(config: TrainConfig):
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune Whisper with LoRA")
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)

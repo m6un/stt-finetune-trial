@@ -173,7 +173,7 @@ def train(config: TrainConfig):
         lora_alpha=config.lora_alpha,
         lora_dropout=config.lora_dropout,
         target_modules=config.lora_target_modules,
-        task_type=TaskType.SEQ_2_SEQ_LM,
+        task_type=TaskType.CAUSAL_LM,
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
@@ -232,13 +232,17 @@ def train(config: TrainConfig):
             input_features = batch["input_features"].to(device)
             labels = batch["labels"].to(device)
 
+            # Call underlying model directly to bypass PEFT's forward wrapper,
+            # which injects input_ids=None into **kwargs causing a conflict in
+            # WhisperDecoder (transformers 5.x passes **kwargs to decoder).
+            base_model = model.base_model.model
             if scaler:
                 with torch.amp.autocast("cuda"):
-                    outputs = model(input_features=input_features, labels=labels)
+                    outputs = base_model(input_features=input_features, labels=labels)
                     loss = outputs.loss / config.gradient_accumulation_steps
                 scaler.scale(loss).backward()
             else:
-                outputs = model(input_features=input_features, labels=labels)
+                outputs = base_model(input_features=input_features, labels=labels)
                 loss = outputs.loss / config.gradient_accumulation_steps
                 loss.backward()
 

@@ -182,13 +182,14 @@ def train(config: TrainConfig):
     # (Can experiment with unfreezing encoder too)
     model.freeze_encoder()
 
-    # Apply LoRA
+    # Apply LoRA with RSLoRA (rank-stabilized: scale = alpha/sqrt(r) for stable higher-rank training)
     lora_config = LoraConfig(
         r=config.lora_r,
         lora_alpha=config.lora_alpha,
         lora_dropout=config.lora_dropout,
         target_modules=config.lora_target_modules,
         task_type=TaskType.CAUSAL_LM,
+        use_rslora=True,
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()

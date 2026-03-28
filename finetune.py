@@ -47,7 +47,7 @@ class TrainConfig:
     learning_rate: float = 1e-4
     batch_size: int = 8
     gradient_accumulation_steps: int = 2
-    num_epochs: int = 15
+    num_epochs: int = 16
     warmup_ratio: float = 0.1
     max_grad_norm: float = 1.0
     fp16: bool = True
@@ -325,7 +325,7 @@ def train(config: TrainConfig):
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune Whisper with LoRA")
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--epochs", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)

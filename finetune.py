@@ -47,7 +47,7 @@ class TrainConfig:
     learning_rate: float = 1e-4
     batch_size: int = 8
     gradient_accumulation_steps: int = 2
-    num_epochs: int = 16
+    num_epochs: int = 10
     warmup_ratio: float = 0.1
     max_grad_norm: float = 1.0
     fp16: bool = True

@@ -64,9 +64,10 @@ class TrainConfig:
 
     def __post_init__(self):
         if self.lora_target_modules is None:
-            # Target all attention projections in both encoder and decoder
+            # Attention projections + feed-forward layers (fc1, fc2) in decoder
+            # FF layers transform hidden reps and may help with Manglish vocab
             self.lora_target_modules = [
-                "k_proj", "v_proj", "q_proj", "out_proj",
+                "k_proj", "v_proj", "q_proj", "out_proj", "fc1", "fc2",
             ]
 
 
